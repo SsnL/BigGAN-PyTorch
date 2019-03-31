@@ -19,15 +19,16 @@ import h5py
 import torch
 import torch.nn as nn
 from torchvision.utils import save_image
-import tensorflow as tf
-import tensorflow_hub as hub
 import parse
 
 # import reference biggan from this folder
-import biggan_v1 as biggan_for_conversion
+try:
+    import biggan_v1 as biggan_for_conversion
+except ImportError:
+    from . import biggan_v1 as biggan_for_conversion
 
 # Import model from main folder
-sys.path.append('..')
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import BigGAN
 
 
@@ -57,6 +58,9 @@ def dump_tfhub_to_hdf5(module_path, hdf5_path, redownload=False):
   if os.path.exists(hdf5_path) and (not redownload):
     print('Loading BigGAN hdf5 file from:', hdf5_path)
     return h5py.File(hdf5_path, 'r')
+
+  import tensorflow as tf
+  import tensorflow_hub as hub
 
   print('Loading BigGAN module from:', module_path)
   tf.reset_default_graph()
@@ -206,34 +210,34 @@ class TFHub2Pytorch(object):
     name = os.path.join(prefix, var) + f':{device}'
     return torch.from_numpy(self.tf_weights[name][:])
 
-# Convert from v1: This function maps 
+# Convert from v1: This function maps
 def convert_from_v1(hub_dict, resolution=128):
   weightname_dict = {'weight_u': 'u0', 'weight_bar': 'weight', 'bias': 'bias'}
   convnum_dict = {'conv0': 'conv1', 'conv1': 'conv2', 'conv_sc': 'conv_sc'}
   attention_blocknum = {128: 3, 256: 4, 512: 3}[resolution]
-  hub2me = {'linear.weight': 'shared.weight', # This is actually the shared weight 
+  hub2me = {'linear.weight': 'shared.weight', # This is actually the shared weight
           # Linear stuff
-          'G_linear.module.weight_bar': 'linear.weight', 
+          'G_linear.module.weight_bar': 'linear.weight',
           'G_linear.module.bias': 'linear.bias',
           'G_linear.module.weight_u': 'linear.u0',
           # output layer stuff
-          'ScaledCrossReplicaBN.weight': 'output_layer.0.gain', 
+          'ScaledCrossReplicaBN.weight': 'output_layer.0.gain',
           'ScaledCrossReplicaBN.bias': 'output_layer.0.bias',
           'ScaledCrossReplicaBN.running_mean': 'output_layer.0.stored_mean',
           'ScaledCrossReplicaBN.running_var': 'output_layer.0.stored_var',
-          'colorize.module.weight_bar': 'output_layer.2.weight', 
+          'colorize.module.weight_bar': 'output_layer.2.weight',
           'colorize.module.bias': 'output_layer.2.bias',
           'colorize.module.weight_u':  'output_layer.2.u0',
           # Attention stuff
-          'attention.gamma': 'blocks.%d.1.gamma' % attention_blocknum, 
+          'attention.gamma': 'blocks.%d.1.gamma' % attention_blocknum,
           'attention.theta.module.weight_u': 'blocks.%d.1.theta.u0' % attention_blocknum,
-          'attention.theta.module.weight_bar': 'blocks.%d.1.theta.weight' % attention_blocknum, 
+          'attention.theta.module.weight_bar': 'blocks.%d.1.theta.weight' % attention_blocknum,
           'attention.phi.module.weight_u':  'blocks.%d.1.phi.u0' % attention_blocknum,
           'attention.phi.module.weight_bar': 'blocks.%d.1.phi.weight' % attention_blocknum,
           'attention.g.module.weight_u': 'blocks.%d.1.g.u0' % attention_blocknum,
-          'attention.g.module.weight_bar': 'blocks.%d.1.g.weight' % attention_blocknum, 
+          'attention.g.module.weight_bar': 'blocks.%d.1.g.weight' % attention_blocknum,
           'attention.o_conv.module.weight_u': 'blocks.%d.1.o.u0' % attention_blocknum,
-          'attention.o_conv.module.weight_bar':'blocks.%d.1.o.weight' % attention_blocknum, 
+          'attention.o_conv.module.weight_bar':'blocks.%d.1.o.weight' % attention_blocknum,
           }
 
   # Loop over the hub dict and build the hub2me map
@@ -243,11 +247,11 @@ def convert_from_v1(hub_dict, resolution=128):
         out = parse.parse('GBlock.{:d}.{}.module.{}',name)
         blocknum, convnum, weightname = out
         if weightname not in weightname_dict:
-          continue # else hyperBN in 
+          continue # else hyperBN in
         out_name = 'blocks.%d.0.%s.%s' % (blocknum, convnum_dict[convnum], weightname_dict[weightname]) # Increment conv number by 1
       else: # hyperbn not conv
         BNnum = 2 if 'HyperBN_1' in name else 1
-        if 'embed' in name:        
+        if 'embed' in name:
           out = parse.parse('GBlock.{:d}.{}.module.{}',name)
           blocknum, gamma_or_beta, weightname = out
           if weightname not in weightname_dict: # Ignore weight_v
@@ -265,9 +269,9 @@ def convert_from_v1(hub_dict, resolution=128):
   # Invert the hub2me map
   me2hub = {hub2me[item]: item for item in hub2me}
   new_dict = {}
-  dimz_dict = {128: 20, 256: 20, 512:16} 
+  dimz_dict = {128: 20, 256: 20, 512:16}
   for item in me2hub:
-    # Swap input dim ordering on batchnorm bois to account for my arbitrary change of ordering when concatenating Ys and Zs  
+    # Swap input dim ordering on batchnorm bois to account for my arbitrary change of ordering when concatenating Ys and Zs
     if ('bn' in item and 'weight' in item) and ('gain' in item or 'bias' in item) and ('output_layer' not in item):
       new_dict[item] = torch.cat([hub_dict[me2hub[item]][:, -128:], hub_dict[me2hub[item]][:, :dimz_dict[resolution]]], 1)
     # Reshape the first linear weight, bias, and u0
@@ -280,29 +284,29 @@ def convert_from_v1(hub_dict, resolution=128):
     elif me2hub[item] == 'linear.weight': # THIS IS THE SHARED WEIGHT NOT THE FIRST LINEAR LAYER
       # Transpose shared weight so that it's an embedding
       new_dict[item] = hub_dict[me2hub[item]].t()
-    elif 'weight_u' in me2hub[item]: # Unsqueeze u0s    
+    elif 'weight_u' in me2hub[item]: # Unsqueeze u0s
       new_dict[item] = hub_dict[me2hub[item]].unsqueeze(0)
     else:
-      new_dict[item] = hub_dict[me2hub[item]]      
+      new_dict[item] = hub_dict[me2hub[item]]
   return new_dict
 
 def get_config(resolution):
   attn_dict = {128: '64', 256: '128', 512: '64'}
   dim_z_dict = {128: 120, 256: 140, 512: 128}
-  config = {'G_param': 'SN', 'D_param': 'SN', 
-           'G_ch': 96, 'D_ch': 96, 
-           'D_wide': True, 'G_shared': True, 
-           'shared_dim': 128, 'dim_z': dim_z_dict[resolution], 
-           'hier': True, 'cross_replica': False, 
+  config = {'G_param': 'SN', 'D_param': 'SN',
+           'G_ch': 96, 'D_ch': 96,
+           'D_wide': True, 'G_shared': True,
+           'shared_dim': 128, 'dim_z': dim_z_dict[resolution],
+           'hier': True, 'cross_replica': False,
            'mybn': False, 'G_activation': nn.ReLU(inplace=True),
            'G_attn': attn_dict[resolution],
            'norm_style': 'bn',
            'G_init': 'ortho', 'skip_init': True, 'no_optim': True,
            'G_fp16': False, 'G_mixed_precision': False,
-           'accumulate_stats': False, 'num_standing_accumulations': 16, 
+           'accumulate_stats': False, 'num_standing_accumulations': 16,
            'G_eval_mode': True,
-           'BN_eps': 1e-04, 'SN_eps': 1e-04, 
-           'num_G_SVs': 1, 'num_G_SV_itrs': 1, 'resolution': resolution, 
+           'BN_eps': 1e-04, 'SN_eps': 1e-04,
+           'num_G_SVs': 1, 'num_G_SV_itrs': 1, 'resolution': resolution,
            'n_classes': 1000}
   return config
 
@@ -325,19 +329,19 @@ def convert_biggan(resolution, weight_dir, redownload=False, no_ema=False, verbo
   G = BigGAN.Generator(**config)
   G.load_state_dict(state_dict, strict=False) # Ignore missing sv0 entries
   torch.save(state_dict, pth_path)
-  
+
   # output_location ='pretrained_weights/TFHub-PyTorch-128.pth'
-  
+
   return G
 
 
 def generate_sample(G, z_dim, batch_size, filename, parallel=False):
-  
+
   G.eval()
   G.to(DEVICE)
   with torch.no_grad():
     z = torch.randn(batch_size, G.dim_z).to(DEVICE)
-    y = torch.randint(low=0, high=1000, size=(batch_size,), 
+    y = torch.randint(low=0, high=1000, size=(batch_size,),
         device=DEVICE, dtype=torch.int64, requires_grad=False)
     if parallel:
       images = nn.parallel.data_parallel(G, (z, G.shared(y)))
@@ -372,7 +376,7 @@ def parse_args():
     help='Batch size used for test sample.')
   parser.add_argument(
     '--parallel', action='store_true', default=False,
-    help='Parallelize G?')     
+    help='Parallelize G?')
   args = parser.parse_args()
   return args
 
