@@ -326,7 +326,7 @@ def convert_biggan(resolution, weight_dir, redownload=False, no_ema=False, verbo
   state_dict = convert_from_v1(state_dict_v1, resolution)
   # Get the config, build the model
   config = get_config(resolution)
-  G = BigGAN.Generator(**config)
+  G = BigGAN.Generator(**config, quiet=(not verbose))
   G.load_state_dict(state_dict, strict=False) # Ignore missing sv0 entries
   torch.save(state_dict, pth_path)
 
